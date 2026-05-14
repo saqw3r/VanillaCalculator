@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+COMPOSE_FILE="$SCRIPT_DIR/backend/docker-compose.yml"
+
+if [ ! -f "$COMPOSE_FILE" ]; then
+  echo "Error: docker-compose.yml not found at $COMPOSE_FILE" >&2
+  exit 1
+fi
+
+find_port() {
+  local base=$1 port=$1
+  while ss -tln 2>/dev/null | grep -qP ":$port "; do port=$((port + 1)); done
+  echo "$port"
+}
+
+usage() {
+  cat <<'EOF'
+Usage: mysandbox <command> [name] [service]
+
+Commands:
+  create <name>   Create & start a new sandbox
+  list            List running sandboxes
+  kill <name>     Stop & remove a sandbox (deletes volumes)
+  logs <name>     Tail logs of a sandbox
+  db <name>       Open psql shell for a sandbox
+EOF
+  exit 1
+}
+
+case "${1:-}" in
+  create)
+    NAME="${2:-}"; [ -z "$NAME" ] && usage
+    API_PORT=$(find_port 8081)
+    DB_PORT=$(find_port $((API_PORT + 1000)))
+    echo "Creating sandbox '$NAME' (API :$API_PORT  DB :$DB_PORT)"
+    API_PORT=$API_PORT DB_PORT=$DB_PORT docker compose -p "$NAME" -f "$COMPOSE_FILE" up -d
+    echo "Sandbox '$NAME' is live."
+    echo "  API  http://localhost:$API_PORT"
+    echo "  DB   postgresql://calculator:calculator_pass@localhost:$DB_PORT/calculator"
+    ;;
+  list)
+    docker ps --filter "label=com.docker.compose.project" \
+      --format "table {{.Names}}\t{{.Ports}}\t{{.Status}}" 2>/dev/null || echo "No sandboxes running."
+    ;;
+  kill)
+    NAME="${2:-}"; [ -z "$NAME" ] && usage
+    echo "Removing sandbox '$NAME'..."
+    docker compose -p "$NAME" -f "$COMPOSE_FILE" down -v
+    echo "Done."
+    ;;
+  logs)
+    NAME="${2:-}"; [ -z "$NAME" ] && usage
+    SERVICE="${3:-calculator-api}"
+    docker compose -p "$NAME" -f "$COMPOSE_FILE" logs -f "$SERVICE"
+    ;;
+  db)
+    NAME="${2:-}"; [ -z "$NAME" ] && usage
+    docker compose -p "$NAME" -f "$COMPOSE_FILE" exec db psql -U calculator -d calculator
+    ;;
+  *) usage ;;
+esac

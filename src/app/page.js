@@ -2,6 +2,7 @@
 import { useState, useEffect } from 'react';
 
 const C = '#F7F2EC', D = '#ECE1D9', U = '#E6D9CF', O = '#D6CAD6', S = '#C4B4C4', A = '#B8A9C9', T = '#3D3D3D';
+const API_BASE = process.env.NEXT_PUBLIC_API_URL;
 
 export default function Home() {
   const [a, setA] = useState(''), [op, setOp] = useState(''), [b, setB] = useState('');
@@ -27,7 +28,7 @@ export default function Home() {
   const eq = async () => {
     if (!a || !b || !op || loading) return;
     setLoading(true);
-    const res = await fetch('/api/calculate', {
+    const res = await fetch(`${API_BASE}/api/calculate`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ num1: +a, num2: +b, operation: op }),
     });
@@ -43,7 +44,7 @@ export default function Home() {
     if (val === 0 && fn === 'x⁻¹') { setR('Division by zero'); return; }
     if (val <= 0 && (fn === '√' || fn === 'log')) { setR('Invalid input'); return; }
     setLoading(true);
-    const res = await fetch('/api/calculate', {
+    const res = await fetch(`${API_BASE}/api/calculate`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ num1: val, operation: fn }),
     });

@@ -8,6 +8,11 @@
 # testing
 /coverage
 
+# .NET
+backend/**/bin/
+backend/**/obj/
+backend/**/*.user
+
 # next.js
 /.next/
 /out/
