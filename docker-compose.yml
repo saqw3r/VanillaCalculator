@@ -1,19 +1,15 @@
 services:
-  calculator-api:
+  app:
     build:
-      context: ./CalculatorApi
+      context: .
       dockerfile: Dockerfile
     ports:
-      - "${API_PORT:-8080}:8080"
+      - "${API_PORT:-3000}:3000"
     environment:
-      ConnectionStrings__Default: "Host=db;Port=5432;Database=calculator;Username=calculator;Password=calculator_pass"
-      ASPNETCORE_ENVIRONMENT: Production
-      ASPNETCORE_URLS: http://0.0.0.0:8080
+      DATABASE_URL: "postgres://calculator:calculator_pass@db:5432/calculator"
     depends_on:
       db:
         condition: service_healthy
-    volumes:
-      - api-logs:/app/logs
 
   db:
     image: postgres:18-alpine
@@ -33,4 +29,3 @@ services:
 
 volumes:
   pgdata:
-  api-logs:

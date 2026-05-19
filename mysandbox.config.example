@@ -1,0 +1,23 @@
+# ── mysandbox config ──────────────────────────────────────────────────────────
+# Copy to mysandbox.config or ~/.mysandbox.config
+# All values are optional — defaults apply when unset.
+
+# Remote target (leave empty to run locally)
+# MYSANDBOX_TARGET="ssh://user@192.168.1.100"
+# MYSANDBOX_SSH_KEY="/home/user/.ssh/id_rsa"
+# MYSANDBOX_REMOTE_DIR="/home/user/VanillaCalculator"
+#
+# Auto-clone/pull: if the remote dir doesn't exist, mysandbox clones it.
+# On subsequent runs it pulls the latest (only if set).
+# MYSANDBOX_REPO_URL="https://github.com/youruser/VanillaCalculator.git"
+
+# Mode: cli (system PostgreSQL + direct process) or docker (containers)
+# MYSANDBOX_MODE="cli"
+
+# Port hint: leave empty for auto-select, or set a specific port
+# MYSANDBOX_API_PORT=""
+
+# PostgreSQL credentials (for CLI mode)
+# MYSANDBOX_PG_USER="calculator"
+# MYSANDBOX_PG_PASS="calculator_pass"
+# MYSANDBOX_PG_DB="calculator"

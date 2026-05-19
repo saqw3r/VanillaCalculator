@@ -7,8 +7,10 @@
     "start": "next start"
   },
   "dependencies": {
+    "@next/swc-win32-x64-msvc": "^14.2.18",
     "@swc/core": "^1.15.33",
     "next": "14.2.18",
+    "pg": "^8.13.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   }

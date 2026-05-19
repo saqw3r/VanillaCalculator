@@ -1,82 +1,76 @@
-# Deploy Calculator to Raspberry Pi
+# Deploy Calculator
 
-Two options: **containerized (k3s)** or **direct** (no containerization).
+Two options: **Docker/Podman Compose** or **Direct (CLI)**.
 
-## Prerequisites (both options)
+## Configuration
 
-- Raspberry Pi 4/5 running Raspberry Pi OS (64-bit)
-- Domain pointing to Cloudflare (e.g. `calculator.example.com`)
-- Cloudflare Tunnel (`cloudflared`) installed on the Pi
-- SSH access to the Pi
+Set once for all options:
+
+```bash
+export DOMAIN=calc.example.com          # your domain
+export API_PORT=                        # leave empty for auto-select, or set e.g. 3000
+```
 
 ---
 
-## Option 1: Containerized (k3s)
+## Option A: Docker/Podman Compose
 
-### 1. Install k3s
+Run the full stack (Next.js + PostgreSQL) using Docker Compose.
 
-```bash
-curl -sfL https://get.k3s.io | sh -
-sudo k3s kubectl get nodes   # verify
-```
-
-### 2. Build & import images
-
-On the Pi (or build elsewhere and `scp` the tarball):
+### 1. Build & run
 
 ```bash
 cd /path/to/VanillaCalculator
-
-# --- Frontend ---
-npm install
-npx next build --no-lint
-podman build -t calculator-frontend:arm64 -f Dockerfile.frontend .
-podman save calculator-frontend:arm64 | sudo k3s ctr images import -
-
-# --- API ---
-podman build -t calculator-api:arm64 backend/CalculatorApi/
-podman save calculator-api:arm64 | sudo k3s ctr images import -
+docker compose up -d
+# or: podman-compose up -d
 ```
 
-### 3. Deploy
+- App listens on `http://127.0.0.1:3000` (both frontend and `/api/` routes)
+- PostgreSQL on `localhost:5432`
+
+### 2. Tunnel (ngrok or cloudflared)
 
 ```bash
-sudo k3s kubectl apply -k k8s/
-sudo k3s kubectl get pods -n calculator   # verify all 3 pods are Running
+# ngrok
+ngrok http 3000
+
+# cloudflared (quick tunnel)
+cloudflared tunnel --url http://127.0.0.1:3000
 ```
 
-### 4. Cloudflare Tunnel config
+Or with a permanent Cloudflare Tunnel config:
 
 `~/.cloudflared/config.yml`:
 
 ```yaml
 tunnel: <tunnel-id>
-credentials-file: /home/pi/.cloudflared/<tunnel-id>.json
+credentials-file: ~/.cloudflared/<tunnel-id>.json
 ingress:
-  - hostname: calculator.example.com
-    path: /api/*
-    service: http://localhost:30080
-  - hostname: calculator.example.com
-    service: http://localhost:30081
+  - hostname: YOUR_DOMAIN
+    service: http://localhost:3000
   - service: http_status:404
 ```
-
-Restart tunnel:
 
 ```bash
 sudo systemctl restart cloudflared
 ```
 
+### 3. Stop
+
+```bash
+docker compose down -v
+```
+
 ---
 
-## Option 2: Direct (no containers)
+## Option B: Direct (CLI mode)
 
-Frontend static files are served by the C# API itself — one port, one process, no k8s.
+Next.js runs directly, PostgreSQL installed on the system — no containers.
 
 ### 1. Install dependencies
 
 ```bash
-sudo apt update && sudo apt install -y postgresql postgresql-client dotnet-sdk-10.0 nodejs npm
+sudo apt update && sudo apt install -y postgresql postgresql-client nodejs npm
 ```
 
 ### 2. Set up PostgreSQL
@@ -86,48 +80,40 @@ sudo -u postgres psql -c "CREATE USER calculator WITH PASSWORD 'calculator_pass'
 sudo -u postgres psql -c "CREATE DATABASE calculator OWNER calculator;"
 ```
 
-### 3. Build frontend
+### 3. Build & run
 
 ```bash
 cd /path/to/VanillaCalculator
 npm install
-npx next build --no-lint
+npm run build
+
+# Use a specific port, or leave empty for auto-select
+if [ -n "$API_PORT" ]; then
+  DATABASE_URL="postgres://calculator:calculator_pass@localhost:5432/calculator" \
+  npm start -- -p "$API_PORT"
+else
+  DATABASE_URL="postgres://calculator:calculator_pass@localhost:5432/calculator" \
+  npm start
+fi
 ```
 
-### 4. Copy static files into API project
+Or run as a systemd service with a fixed port:
 
-```bash
-rm -rf backend/CalculatorApi/wwwroot
-cp -r out backend/CalculatorApi/wwwroot
-```
-
-### 5. Build & run the API
-
-```bash
-cd backend/CalculatorApi
-export ConnectionStrings__Default="Host=localhost;Port=5432;Database=calculator;Username=calculator;Password=calculator_pass"
-dotnet run --urls "http://0.0.0.0:8080"
-```
-
-Or publish and run as a systemd service:
-
-```bash
-dotnet publish -c Release -o /opt/calculator-api
-```
-
-Create `/etc/systemd/system/calculator-api.service`:
+Create `/etc/systemd/system/calculator.service` (set `YOUR_PORT`):
 
 ```ini
 [Unit]
-Description=Calculator API
+Description=Calculator
 After=network.target postgresql.service
 
 [Service]
-WorkingDirectory=/opt/calculator-api
-ExecStart=/opt/calculator-api/CalculatorApi
+WorkingDirectory=/path/to/VanillaCalculator
+ExecStart=/usr/bin/npx next start -p YOUR_PORT
 Restart=always
 RestartSec=5
-Environment=ConnectionStrings__Default=Host=localhost;Port=5432;Database=calculator;Username=calculator;Password=calculator_pass
+Environment=PORT=YOUR_PORT
+Environment=DATABASE_URL=postgres://calculator:calculator_pass@localhost:5432/calculator
+Environment=NODE_ENV=production
 
 [Install]
 WantedBy=multi-user.target
@@ -135,25 +121,33 @@ WantedBy=multi-user.target
 
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable --now calculator-api
+sudo systemctl enable --now calculator
 ```
 
-### 6. Cloudflare Tunnel config
+### 4. Tunnel (ngrok or cloudflared)
 
-Single port serves everything:
+Replace `YOUR_PORT` with the port the app is running on:
+
+```bash
+# ngrok
+ngrok http YOUR_PORT
+
+# cloudflared (quick tunnel)
+cloudflared tunnel --url http://127.0.0.1:YOUR_PORT
+```
+
+Or with a permanent Cloudflare Tunnel config:
 
 `~/.cloudflared/config.yml`:
 
 ```yaml
 tunnel: <tunnel-id>
-credentials-file: /home/pi/.cloudflared/<tunnel-id>.json
+credentials-file: ~/.cloudflared/<tunnel-id>.json
 ingress:
-  - hostname: calculator.example.com
-    service: http://localhost:8080
+  - hostname: YOUR_DOMAIN
+    service: http://127.0.0.1:YOUR_PORT
   - service: http_status:404
 ```
-
-Restart tunnel:
 
 ```bash
 sudo systemctl restart cloudflared
@@ -163,10 +157,179 @@ sudo systemctl restart cloudflared
 
 ## Verify
 
-Open `https://calculator.example.com` in a browser. Try `2 + 3 =` — the result should appear.
+Open `https://YOUR_DOMAIN` in a browser. Try `2 + 3 =` — the result should appear.
 
 API health check:
 
 ```bash
-curl https://calculator.example.com/api/history
+curl https://YOUR_DOMAIN/api/history
+```
+
+---
+
+## Sandbox CLI
+
+`mysandbox` manages isolated sandbox environments for development and testing.
+
+### Config & Remote execution
+
+`mysandbox` reads configuration from three locations (first found wins):
+
+1. `$MYSANDBOX_CONFIG` — explicit path via environment variable
+2. `./mysandbox.config` — config file in the project root
+3. `~/.mysandbox.config` — user-level config file
+
+Example config:
+
+```bash
+# Run everything on a remote machine via SSH with auto-clone
+MYSANDBOX_TARGET="ssh://user@192.168.1.100"
+MYSANDBOX_SSH_KEY="/home/user/.ssh/id_rsa"
+MYSANDBOX_REMOTE_DIR="/home/user/VanillaCalculator"
+MYSANDBOX_REPO_URL="https://github.com/youruser/VanillaCalculator.git"
+MYSANDBOX_MODE="cli"
+
+# Or run locally with Docker
+# MYSANDBOX_TARGET=""
+# MYSANDBOX_MODE="docker"
+```
+
+When `MYSANDBOX_TARGET` is set to an `ssh://` URL, all `mysandbox` commands are forwarded to the remote machine via SSH. The remote machine must have:
+- SSH key-based authentication configured
+- If `MYSANDBOX_REPO_URL` is **set**: the repo is auto-cloned/pulled on every run
+- If **not set**: the project must already be cloned at `MYSANDBOX_REMOTE_DIR`
+
+The `SANDBOX_URL` is printed in the output regardless of whether running locally or remotely.
+
+### Modes
+
+Set via the `MYSANDBOX_MODE` environment variable:
+
+| Mode | Value | PostgreSQL | API runtime | Cleanup |
+|---|---|---|---|---|
+| **CLI** (default) | `cli` | system Postgres (apt) | `npx next start` | kills process, drops DB, removes files |
+| **Docker** | `docker` | `postgres:18-alpine` container | `app` container (from `Dockerfile`) | `docker compose -p <name> down -v` |
+
+```bash
+# Use Docker mode for a session
+export MYSANDBOX_MODE=docker
+
+# Or inline
+MYSANDBOX_MODE=docker mysandbox create demo
+```
+
+### Commands
+
+| Command | Description |
+|---|---|
+| `mysandbox run <name>` | Start sandbox in foreground with public tunnel URL (ngrok or cloudflared). Ctrl+C to stop and clean up |
+| `mysandbox create <name>` | Start sandbox in background |
+| `mysandbox stop [name]` | Stop one sandbox by name, or stop **all** sandboxes when called without a name |
+| `mysandbox kill <name>` | Alias for `stop <name>` — stop & remove a single sandbox |
+| `mysandbox list` | List all sandboxes with status, port, PID, and public URL |
+| `mysandbox logs <name>` | Tail the API output log |
+| `mysandbox db <name>` | Open `psql` shell connected to the sandbox database |
+| `mysandbox install` | Register `mysandbox` in the system PATH |
+| `mysandbox uninstall` | Remove `mysandbox` from the system |
+
+### Tunnel providers
+
+Tried in order — the first available one that produces a public URL wins:
+
+1. **ngrok** (`ngrok http <port>`) — URL parsed from `http://127.0.0.1:4040/api/tunnels` via Python (up to 20s)
+2. **cloudflared** (`cloudflared tunnel --url`) — URL grepped from output for `*.trycloudflare.com` (up to 15s)
+
+The method and URL are stored in the sandbox directory (`/tmp/mysandbox/<name>/tunnel_method`, `tunnel_url`) and printed as:
+
+```
+  Public URL (ngrok): https://abc123.ngrok-free.app
+  SANDBOX_URL=https://abc123.ngrok-free.app
+```
+
+### Examples
+
+```bash
+# ── CLI mode (default) ──
+
+# Foreground sandbox (Ctrl+C to stop)
+mysandbox run demo
+# Sandbox 'demo' starting...
+#   API  http://127.0.0.1:8090
+#   Public URL (ngrok): https://abc123.ngrok-free.app
+#   SANDBOX_URL=https://abc123.ngrok-free.app
+#
+# Press Ctrl+C to stop the sandbox and clean up.
+
+# Background sandbox
+mysandbox create test1
+# Sandbox 'test1' is live.
+#   API  http://127.0.0.1:8091
+#   Public URL (cloudflared): https://xyz789.trycloudflare.com
+#   SANDBOX_URL=https://xyz789.trycloudflare.com
+
+# Stop all sandboxes
+mysandbox stop
+
+# ── Docker mode ──
+
+MYSANDBOX_MODE=docker mysandbox create test2
+MYSANDBOX_MODE=docker mysandbox list
+MYSANDBOX_MODE=docker mysandbox stop test2
+```
+
+### Sandbox lifecycle
+
+| Step | CLI mode | Docker mode |
+|---|---|---|
+| Build | `npm run build` (once) | `docker compose build` |
+| Database | `CREATE DATABASE calculator_<name>` | Docker container `postgres:18-alpine` |
+| API start | `npx next start` on free port | `docker compose -p <name> up -d` |
+| Tunnel | `ngrok http <port>` (fallback: `cloudflared tunnel --url`) | same |
+| Stop / kill | kill process → drop database → remove `/tmp/mysandbox/<name>/` | `docker compose -p <name> down -v` → remove sandbox directory |
+| `stop` (no name) | iterates all sandboxes in `/tmp/mysandbox/`, cleans each | iterates all Docker Compose projects, brings each down |
+
+---
+
+## Installation (all platforms)
+
+### Linux / macOS / ARM (bash)
+
+```bash
+# From the project directory:
+./mysandbox install
+
+# Or manually:
+sudo ln -s "$(pwd)/mysandbox" /usr/local/bin/mysandbox
+```
+
+`install` creates a **symlink** (`/usr/local/bin/mysandbox` → `repo/mysandbox`). After install, you can run `mysandbox` from any directory — it resolves the symlink back to the repo root to find all project files. If `/usr/local/bin/` is not writable (no sudo), it falls back to `~/.local/bin/` and adds that to your shell `rc` file.
+
+### Windows
+
+Requires **Git Bash** (from [Git for Windows](https://git-scm.com)) or **WSL**.
+
+**Option A — run `mysandbox.ps1` in PowerShell (adds to PATH):**
+
+```powershell
+powershell -ExecutionPolicy Bypass -File mysandbox.ps1
+```
+
+Now `mysandbox` works from any terminal — the `.cmd` shim automatically finds Git Bash.
+
+**Option B — manual PATH addition:**
+
+```powershell
+# Add this to your PowerShell $PROFILE:
+$env:Path += ";C:\path\to\VanillaCalculator"
+```
+
+**Option C — standalone (no bash):**
+
+The `.cmd` shim (`mysandbox.cmd`) can be invoked directly from any `cmd.exe` or PowerShell terminal if Git Bash is installed.
+
+### Uninstall
+
+```bash
+./mysandbox uninstall
+# or: sudo rm /usr/local/bin/mysandbox
 ```
