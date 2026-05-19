@@ -5,6 +5,16 @@ set -euo pipefail
 script_path="${BASH_SOURCE[0]}"
 while [ -L "$script_path" ]; do script_path="$(readlink "$script_path")"; done
 SCRIPT_DIR="$(cd "$(dirname "$script_path")" && pwd)"
+
+# Fallback if symlink resolution failed (Windows Git Bash reparse points)
+if [ ! -f "$SCRIPT_DIR/package.json" ]; then
+  script_path="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || true)"
+  [ -n "$script_path" ] && SCRIPT_DIR="$(cd "$(dirname "$script_path")" && pwd)"
+fi
+if [ ! -f "$SCRIPT_DIR/package.json" ]; then
+  SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+fi
+
 COMPOSE_FILE="$SCRIPT_DIR/docker-compose.yml"
 SANDBOX_DIR="/tmp/mysandbox"
 
@@ -78,7 +88,7 @@ fi
 
 find_port() {
   local base=$1 port=$1
-  while ss -tln 2>/dev/null | grep -qP ":$port "; do port=$((port + 1)); done
+  while ss -tln 2>/dev/null | grep -q ":$port "; do port=$((port + 1)); done
   echo "$port"
 }
 
@@ -163,15 +173,30 @@ build_api() {
 # ── CLI mode (direct processes + system PostgreSQL) ─────────────────────────
 
 cli_setup_db() {
-  sudo -u postgres psql -c "CREATE DATABASE ${PG_DB}_$1 OWNER $PG_USER;"
+  local name=$1
+  if command -v psql &>/dev/null; then
+    if sudo -n -u postgres psql -c "CREATE DATABASE ${PG_DB}_${name} OWNER $PG_USER;" 2>/dev/null; then
+      return 0
+    fi
+    # Fallback: try without sudo (Windows / per-user PostgreSQL)
+    if psql -U "$PG_USER" -c "CREATE DATABASE ${PG_DB}_${name} OWNER $PG_USER;" 2>/dev/null; then
+      return 0
+    fi
+  fi
+  echo "  (no PostgreSQL available — API will run without database)"
 }
 
 cli_drop_db() {
-  sudo -u postgres psql -c "DROP DATABASE IF EXISTS ${PG_DB}_$1;"
+  local name=$1
+  if command -v psql &>/dev/null; then
+    sudo -n -u postgres psql -c "DROP DATABASE IF EXISTS ${PG_DB}_${name};" 2>/dev/null ||
+    psql -U "$PG_USER" -c "DROP DATABASE IF EXISTS ${PG_DB}_${name};" 2>/dev/null || true
+  fi
 }
 
 cli_start_api() {
-  local name=$1 port=$2 sandbox="$SANDBOX_DIR/$name"
+  local name=$1 port=$2
+  local sandbox="$SANDBOX_DIR/$name"
   local conn="postgres://$PG_USER:$PG_PASS@localhost:5432/${PG_DB}_${name}"
   mkdir -p "$sandbox"
   DATABASE_URL="$conn" \
@@ -187,7 +212,8 @@ cli_stop_api() {
 }
 
 cli_cleanup() {
-  local name=$1 sandbox="$SANDBOX_DIR/$name"
+  local name=$1
+  local sandbox="$SANDBOX_DIR/$name"
   stop_tunnel "$sandbox"
   cli_stop_api "$sandbox"
   cli_drop_db "$name"
@@ -207,7 +233,8 @@ cli_stop_all() {
 # ── Docker mode (docker-compose per sandbox) ─────────────────────────────────
 
 docker_start_api() {
-  local name=$1 port=$2 sandbox="$SANDBOX_DIR/$name"
+  local name=$1 port=$2
+  local sandbox="$SANDBOX_DIR/$name"
   local db_port=$(find_port $((port + 1000)))
   mkdir -p "$sandbox"
   echo "$port" > "$sandbox/port"
@@ -221,7 +248,8 @@ docker_stop_api() {
 }
 
 docker_cleanup() {
-  local name=$1 sandbox="$SANDBOX_DIR/$name"
+  local name=$1
+  local sandbox="$SANDBOX_DIR/$name"
   stop_tunnel "$sandbox"
   docker_stop_api "$name"
   rm -rf "$sandbox"
@@ -276,21 +304,47 @@ cmd_install() {
 
   # Fallback: ~/.local/bin
   mkdir -p "$HOME/.local/bin"
-  dest="$HOME/.local/bin/mysandbox"
-  ln -sf "$src" "$dest"
+  local dest="$HOME/.local/bin/mysandbox" installed=""
 
-  # On Windows (Git Bash / MSYS / CYGWIN), also register the .cmd shim
-  # so CMD and PowerShell find it via PATHEXT without a "what program?" prompt.
+  # On Windows, generate a .cmd wrapper with the real repo path
+  # (symlinks don't resolve correctly via Git Bash on Windows)
   if [[ "$(uname -s)" =~ ^(MINGW|MSYS|CYGWIN) ]]; then
-    cp "$SCRIPT_DIR/mysandbox.cmd" "$HOME/.local/bin/mysandbox.cmd"
-    echo "Installed mysandbox → $HOME/.local/bin/mysandbox.cmd"
+    local win_src
+    win_src="$(cygpath -m "$SCRIPT_DIR/mysandbox" 2>/dev/null || echo "$SCRIPT_DIR/mysandbox")"
+    cat > "$HOME/.local/bin/mysandbox.cmd" << 'CMDEOF'
+@echo off
+setlocal enabledelayedexpansion
+set "BASH="
+for %%P in (
+  "C:\Program Files\Git\bin\bash.exe"
+  "C:\Program Files (x86)\Git\bin\bash.exe"
+  "%LocalAppData%\Programs\Git\bin\bash.exe"
+  "%USERPROFILE%\scoop\apps\git\current\bin\bash.exe"
+) do if exist %%P set "BASH=%%~P" & goto :run
+for %%X in (bash.exe) do set "BASH_PATH=%%~$PATH:X"
+if defined BASH_PATH (
+  set "BASH=!BASH_PATH!"
+  echo !BASH_PATH! | findstr /I "System32 Sysnative" >nul
+  if errorlevel 1 goto :run
+)
+echo mysandbox requires Git Bash. Install from https://git-scm.com
+exit /b 1
+:run
+"%BASH%" "__SANDBOX_PATH__" %*
+CMDEOF
+    sed -i "s|__SANDBOX_PATH__|${win_src}|g" "$HOME/.local/bin/mysandbox.cmd"
+    installed="$HOME/.local/bin/mysandbox.cmd"
+  else
+    # Linux / macOS — symlink the bash script
+    ln -sf "$src" "$dest"
+    installed="$dest"
   fi
 
   if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]] && [ -n "$rc_file" ]; then
     echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$rc_file"
     echo "Added ~/.local/bin to PATH in $rc_file"
   fi
-  echo "Installed mysandbox → $dest"
+  echo "Installed mysandbox → $installed"
   if [ -n "$rc_file" ]; then
     echo "Run 'source $rc_file' or restart your shell to use it."
   fi
