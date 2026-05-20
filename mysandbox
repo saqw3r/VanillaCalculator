@@ -102,6 +102,15 @@ find_port() {
   echo "$port"
 }
 
+safe_rm() {
+  rm -rf "$@" 2>/dev/null || {
+    for d in "$@"; do
+      [ -d "$d" ] && command -v cygpath &>/dev/null && cmd //c "rmdir /s /q \"$(cygpath -w "$d" 2>/dev/null)\"" 2>/dev/null || true
+      [ -d "$d" ] && rm -rf "$d" 2>/dev/null || true
+    done
+  } || true
+}
+
 # ── Tunnel providers ─────────────────────────────────────────────────────────
 
 start_ngrok() {
@@ -179,29 +188,27 @@ resolve_db_mode() {
   if command -v psql &>/dev/null; then
     if sudo -n -u postgres psql -c "CREATE DATABASE ${PG_DB}_${name} OWNER $PG_USER;" 2>/dev/null; then
       echo "postgres" > "$sandbox/db_mode"
-      echo "postgres"
       return
     fi
     if psql -U "$PG_USER" -c "CREATE DATABASE ${PG_DB}_${name} OWNER $PG_USER;" 2>/dev/null; then
       echo "postgres" > "$sandbox/db_mode"
-      echo "postgres"
       return
     fi
   fi
 
   # PostgreSQL not available — interactive prompt
-  echo ""
-  echo "╔══════════════════════════════════════════════════════════╗"
-  echo "║  PostgreSQL (psql) is not available on this system.    ║"
-  echo "║  The API needs a database to persist calculations.    ║"
-  echo "╚══════════════════════════════════════════════════════════╝"
-  echo ""
-  echo "How should this sandbox store data?"
-  echo "  1) File-based store (no setup) — persists to a local JSON file"
-  echo "  2) Docker mode — runs PostgreSQL in a Docker/Podman container"
-  echo "  3) Install PostgreSQL — show setup instructions"
-  echo "  s) Skip — run without persistence"
-  echo ""
+  echo "" >&2
+  echo "╔══════════════════════════════════════════════════════════╗" >&2
+  echo "║  PostgreSQL (psql) is not available on this system.    ║" >&2
+  echo "║  The API needs a database to persist calculations.    ║" >&2
+  echo "╚══════════════════════════════════════════════════════════╝" >&2
+  echo "" >&2
+  echo "How should this sandbox store data?" >&2
+  echo "  1) File-based store (no setup) — persists to a local JSON file" >&2
+  echo "  2) Docker mode — runs PostgreSQL in a Docker/Podman container" >&2
+  echo "  3) Install PostgreSQL — show setup instructions" >&2
+  echo "  s) Skip — run without persistence" >&2
+  echo "" >&2
   local choice
   read -p "Choose [1/2/3/s] (default: 1): " choice
   choice="${choice:-1}"
@@ -209,26 +216,23 @@ resolve_db_mode() {
   case "$choice" in
     2)
       echo "docker" > "$sandbox/db_mode"
-      echo "docker"
       ;;
     3)
-      echo ""
-      echo "To install PostgreSQL:"
-      echo "  Linux (Debian/Ubuntu): sudo apt install postgresql postgresql-client"
-      echo "  macOS: brew install postgresql"
-      echo "  Windows: https://www.postgresql.org/download/windows/"
-      echo ""
-      echo "After installing, run 'psql -U postgres' to verify,"
-      echo "then create this sandbox again."
+      echo "" >&2
+      echo "To install PostgreSQL:" >&2
+      echo "  Linux (Debian/Ubuntu): sudo apt install postgresql postgresql-client" >&2
+      echo "  macOS: brew install postgresql" >&2
+      echo "  Windows: https://www.postgresql.org/download/windows/" >&2
+      echo "" >&2
+      echo "After installing, run 'psql -U postgres' to verify," >&2
+      echo "then create this sandbox again." >&2
       exit 1
       ;;
     s|S)
       echo "skip" > "$sandbox/db_mode"
-      echo "skip"
       ;;
     *)
       echo "file" > "$sandbox/db_mode"
-      echo "file"
       ;;
   esac
 }
@@ -277,9 +281,9 @@ cli_cleanup() {
   stop_tunnel "$sandbox"
   cli_stop_api "$sandbox"
   if [ "$db_mode" = "postgres" ]; then
-    cli_drop_db "$name"
+    cli_drop_db "$name" || true
   fi
-  rm -rf "$sandbox"
+  safe_rm "$sandbox"
 }
 
 cli_stop_all() {
@@ -288,7 +292,7 @@ cli_stop_all() {
     [ -d "$dir" ] || continue
     name=$(basename "$dir")
     echo "  stopping sandbox '$name'..."
-    cli_cleanup "$name"
+    cli_cleanup "$name" || true
   done
 }
 
@@ -458,12 +462,16 @@ case "${1:-}" in
     PORT=$(find_port $PORT_BASE)
     SANDBOX="$SANDBOX_DIR/$NAME"
 
+    # Reap any existing sandbox with this name (stale from unclean shutdown)
+    [ -d "$SANDBOX" ] && safe_rm "$SANDBOX"
+
     build_api
 
     if [ "$MODE" = "docker" ]; then
       docker_start_api "$NAME" "$PORT"
     else
-      db_mode=$(resolve_db_mode "$NAME")
+      resolve_db_mode "$NAME"
+      db_mode=$(cat "$SANDBOX/db_mode")
       if [ "$db_mode" = "docker" ]; then
         docker_start_api "$NAME" "$PORT"
       else
@@ -497,12 +505,16 @@ case "${1:-}" in
     PORT=$(find_port $PORT_BASE)
     SANDBOX="$SANDBOX_DIR/$NAME"
 
+    # Reap any existing sandbox with this name (stale from unclean shutdown)
+    [ -d "$SANDBOX" ] && safe_rm "$SANDBOX"
+
     build_api
 
     if [ "$MODE" = "docker" ]; then
       docker_start_api "$NAME" "$PORT"
     else
-      db_mode=$(resolve_db_mode "$NAME")
+      resolve_db_mode "$NAME"
+      db_mode=$(cat "$SANDBOX/db_mode")
       if [ "$db_mode" = "docker" ]; then
         docker_start_api "$NAME" "$PORT"
       else
@@ -545,18 +557,19 @@ case "${1:-}" in
         any=false
         for dir in "$SANDBOX_DIR"/*/; do
           [ -d "$dir" ] || continue
-          any=true
           name=$(basename "$dir")
           pid=$(cat "$dir/pid" 2>/dev/null || echo "?")
           port=$(cat "$dir/port" 2>/dev/null || echo "?")
           turl=$(cat "$dir/tunnel_url" 2>/dev/null || echo "")
           tmethod=$(cat "$dir/tunnel_method" 2>/dev/null || echo "")
           if [ -f "$dir/pid" ] && kill -0 "$(cat "$dir/pid")" 2>/dev/null; then
+            any=true
             echo "$name  running  :$port  pid $pid"
+            [ -n "$turl" ] && echo "  public (${tmethod:-?}): $turl"
           else
-            echo "$name  stopped  :$port"
+            # Orphaned sandbox — clean it up silently
+            safe_rm "$dir"
           fi
-          [ -n "$turl" ] && echo "  public (${tmethod:-?}): $turl"
         done
         $any || echo "No sandboxes."
         ;;
