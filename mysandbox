@@ -88,20 +88,18 @@ fi
 
 find_port() {
   local base=$1 port=$1
-  while ss -tln 2>/dev/null | grep -q ":$port "; do port=$((port + 1)); done
-  echo "$port"
-}
-
-build_api() {
-  if [ ! -f "$PUBLISH_DIR/CalculatorApi" ]; then
-    echo "Building API..."
-    dotnet publish -c Release -o "$PUBLISH_DIR" "$API_PROJECT" --self-contained false
-    mkdir -p "$PUBLISH_DIR/wwwroot"
-    if [ -d "$SCRIPT_DIR/out" ]; then
-      rm -rf "$PUBLISH_DIR/wwwroot" 2>/dev/null
-      cp -r "$SCRIPT_DIR/out" "$PUBLISH_DIR/wwwroot"
+  while :; do
+    # Linux: ss (socket statistics)
+    if ss -tln 2>/dev/null | grep -q ":$port "; then
+      port=$((port + 1)); continue
     fi
-  fi
+    # Windows: netstat
+    if command -v netstat &>/dev/null && netstat -ano 2>/dev/null | grep -q ":$port "; then
+      port=$((port + 1)); continue
+    fi
+    break
+  done
+  echo "$port"
 }
 
 # ── Tunnel providers ─────────────────────────────────────────────────────────
@@ -164,7 +162,7 @@ stop_tunnel() {
 }
 
 build_api() {
-  if [ ! -f "$SCRIPT_DIR/.next/standalone/server.js" ]; then
+  if [ ! -f "$SCRIPT_DIR/.next/build-manifest.json" ]; then
     echo "Building Next.js app..."
     (cd "$SCRIPT_DIR" && npm run build)
   fi
