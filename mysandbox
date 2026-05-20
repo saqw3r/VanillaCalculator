@@ -170,18 +170,67 @@ build_api() {
 
 # ── CLI mode (direct processes + system PostgreSQL) ─────────────────────────
 
-cli_setup_db() {
+resolve_db_mode() {
   local name=$1
+  local sandbox="$SANDBOX_DIR/$name"
+  mkdir -p "$sandbox"
+
+  # Try PostgreSQL
   if command -v psql &>/dev/null; then
     if sudo -n -u postgres psql -c "CREATE DATABASE ${PG_DB}_${name} OWNER $PG_USER;" 2>/dev/null; then
-      return 0
+      echo "postgres" > "$sandbox/db_mode"
+      echo "postgres"
+      return
     fi
-    # Fallback: try without sudo (Windows / per-user PostgreSQL)
     if psql -U "$PG_USER" -c "CREATE DATABASE ${PG_DB}_${name} OWNER $PG_USER;" 2>/dev/null; then
-      return 0
+      echo "postgres" > "$sandbox/db_mode"
+      echo "postgres"
+      return
     fi
   fi
-  echo "  (no PostgreSQL available — API will run without database)"
+
+  # PostgreSQL not available — interactive prompt
+  echo ""
+  echo "╔══════════════════════════════════════════════════════════╗"
+  echo "║  PostgreSQL (psql) is not available on this system.    ║"
+  echo "║  The API needs a database to persist calculations.    ║"
+  echo "╚══════════════════════════════════════════════════════════╝"
+  echo ""
+  echo "How should this sandbox store data?"
+  echo "  1) File-based store (no setup) — persists to a local JSON file"
+  echo "  2) Docker mode — runs PostgreSQL in a Docker/Podman container"
+  echo "  3) Install PostgreSQL — show setup instructions"
+  echo "  s) Skip — run without persistence"
+  echo ""
+  local choice
+  read -p "Choose [1/2/3/s] (default: 1): " choice
+  choice="${choice:-1}"
+
+  case "$choice" in
+    2)
+      echo "docker" > "$sandbox/db_mode"
+      echo "docker"
+      ;;
+    3)
+      echo ""
+      echo "To install PostgreSQL:"
+      echo "  Linux (Debian/Ubuntu): sudo apt install postgresql postgresql-client"
+      echo "  macOS: brew install postgresql"
+      echo "  Windows: https://www.postgresql.org/download/windows/"
+      echo ""
+      echo "After installing, run 'psql -U postgres' to verify,"
+      echo "then create this sandbox again."
+      exit 1
+      ;;
+    s|S)
+      echo "skip" > "$sandbox/db_mode"
+      echo "skip"
+      ;;
+    *)
+      echo "file" > "$sandbox/db_mode"
+      echo "file"
+      ;;
+  esac
 }
 
 cli_drop_db() {
@@ -195,10 +244,21 @@ cli_drop_db() {
 cli_start_api() {
   local name=$1 port=$2
   local sandbox="$SANDBOX_DIR/$name"
-  local conn="postgres://$PG_USER:$PG_PASS@localhost:5432/${PG_DB}_${name}"
+  local db_mode
+  db_mode=$(cat "$sandbox/db_mode" 2>/dev/null || echo "skip")
   mkdir -p "$sandbox"
-  DATABASE_URL="$conn" \
-  nohup npx next start -p "$port" > "$sandbox/output.log" 2>&1 &
+
+  local envs="SANDBOX_DIR=$sandbox"
+  if [ "$db_mode" = "postgres" ]; then
+    local conn="postgres://$PG_USER:$PG_PASS@localhost:5432/${PG_DB}_${name}"
+    envs="$envs DB_MODE=postgres DATABASE_URL=$conn"
+  elif [ "$db_mode" = "file" ]; then
+    envs="$envs DB_MODE=file"
+  else
+    envs="$envs DB_MODE=skip"
+  fi
+
+  $envs nohup npx next start -p "$port" > "$sandbox/output.log" 2>&1 &
   echo $! > "$sandbox/pid"
   echo "$port" > "$sandbox/port"
 }
@@ -212,9 +272,13 @@ cli_stop_api() {
 cli_cleanup() {
   local name=$1
   local sandbox="$SANDBOX_DIR/$name"
+  local db_mode
+  db_mode=$(cat "$sandbox/db_mode" 2>/dev/null || echo "skip")
   stop_tunnel "$sandbox"
   cli_stop_api "$sandbox"
-  cli_drop_db "$name"
+  if [ "$db_mode" = "postgres" ]; then
+    cli_drop_db "$name"
+  fi
   rm -rf "$sandbox"
 }
 
@@ -396,10 +460,16 @@ case "${1:-}" in
 
     build_api
 
-    case "$MODE" in
-      docker) docker_start_api "$NAME" "$PORT" ;;
-      *)     cli_setup_db "$NAME"; cli_start_api "$NAME" "$PORT" ;;
-    esac
+    if [ "$MODE" = "docker" ]; then
+      docker_start_api "$NAME" "$PORT"
+    else
+      db_mode=$(resolve_db_mode "$NAME")
+      if [ "$db_mode" = "docker" ]; then
+        docker_start_api "$NAME" "$PORT"
+      else
+        cli_start_api "$NAME" "$PORT"
+      fi
+    fi
 
     echo "Sandbox '$NAME' starting..."
     echo "  API  http://127.0.0.1:$PORT"
@@ -429,10 +499,16 @@ case "${1:-}" in
 
     build_api
 
-    case "$MODE" in
-      docker) docker_start_api "$NAME" "$PORT" ;;
-      *)     cli_setup_db "$NAME"; cli_start_api "$NAME" "$PORT" ;;
-    esac
+    if [ "$MODE" = "docker" ]; then
+      docker_start_api "$NAME" "$PORT"
+    else
+      db_mode=$(resolve_db_mode "$NAME")
+      if [ "$db_mode" = "docker" ]; then
+        docker_start_api "$NAME" "$PORT"
+      else
+        cli_start_api "$NAME" "$PORT"
+      fi
+    fi
 
     URL=$(start_tunnel "$PORT" "$SANDBOX" "$SANDBOX/tunnel_method" "$SANDBOX/tunnel_url" || true)
     METHOD=$(cat "$SANDBOX/tunnel_method" 2>/dev/null || echo "")
