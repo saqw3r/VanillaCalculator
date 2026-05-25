@@ -13,7 +13,7 @@ export default function Home() {
   const expr = r !== null ? (op ? `${a} ${op} ${b} =` : '') : op ? `${a} ${op}${b ? ' ' + b : ''}` : '';
 
   const num = n => {
-    if (r !== null) { setA(n); setR(null); return; }
+    if (r !== null) { setA(n); setB(''); setOp(''); setR(null); return; }
     if (n === '.') {
       if (op) { if (!b.includes('.')) setB(v => v === '' ? '0.' : v + '.'); }
       else { if (!a.includes('.')) setA(v => v === '' ? '0.' : v + '.'); }
@@ -23,7 +23,7 @@ export default function Home() {
     }
   };
 
-  const pressOp = o => { if (r !== null) { setA(String(r)); setR(null); } if (a) setOp(o); };
+  const pressOp = o => { if (r !== null) { setA(String(r)); setB(''); setR(null); } if (a) setOp(o); };
 
   const eq = async () => {
     if (!a || !b || !op || loading) return;
@@ -57,7 +57,7 @@ export default function Home() {
   const clr = () => { setA(''); setOp(''); setB(''); setR(null); };
 
   const neg = () => {
-    if (r !== null) { setA(String(-r)); setR(null); }
+    if (r !== null) { setA(String(-r)); setB(''); setOp(''); setR(null); }
     else if (op && b) setB(v => v.startsWith('-') ? v.slice(1) : '-' + v);
     else if (!op && a) setA(v => v.startsWith('-') ? v.slice(1) : '-' + v);
   };
