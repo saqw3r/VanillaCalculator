@@ -205,7 +205,7 @@ resolve_db_mode() {
   echo "" >&2
   echo "How should this sandbox store data?" >&2
   echo "  1) File-based store (no setup) — persists to a local JSON file" >&2
-  echo "  2) Docker mode — runs PostgreSQL in a Docker/Podman container" >&2
+  echo "  2) Container mode — runs PostgreSQL in a Docker or Podman container" >&2
   echo "  3) Install PostgreSQL — show setup instructions" >&2
   echo "  s) Skip — run without persistence" >&2
   echo "" >&2
@@ -215,7 +215,47 @@ resolve_db_mode() {
 
   case "$choice" in
     2)
+      local ct=""
+      if command -v docker &>/dev/null && docker info &>/dev/null 2>&1; then
+        ct="docker"
+      fi
+      if command -v podman &>/dev/null && podman info &>/dev/null 2>&1; then
+        if [ "$ct" = "docker" ]; then
+          echo "" >&2
+          echo "Both Docker and Podman are available." >&2
+          echo "Which container runtime to use?" >&2
+          echo "  1) Docker" >&2
+          echo "  2) Podman" >&2
+          echo "" >&2
+          local rt_choice
+          read -p "Choose [1/2] (default: 1): " rt_choice
+          rt_choice="${rt_choice:-1}"
+          ct="docker"
+          [ "$rt_choice" = "2" ] && ct="podman"
+        else
+          ct="podman"
+        fi
+      fi
+
+      if [ -z "$ct" ]; then
+        echo "" >&2
+        echo "No container runtime (Docker or Podman) is installed." >&2
+        echo "" >&2
+        echo "To install Docker:" >&2
+        echo "  https://docs.docker.com/engine/install/" >&2
+        echo "" >&2
+        echo "To install Podman:" >&2
+        echo "  Linux: sudo apt install podman" >&2
+        echo "  macOS: brew install podman" >&2
+        echo "  Windows: https://podman.io/docs/installation" >&2
+        echo "" >&2
+        echo "After installing, run 'mysandbox create $name' again." >&2
+        exit 1
+      fi
+
+      echo "$ct" > "$sandbox/container_tool"
       echo "docker" > "$sandbox/db_mode"
+      echo "  Using ${ct} to run the database container." >&2
       ;;
     3)
       echo "" >&2
@@ -252,17 +292,17 @@ cli_start_api() {
   db_mode=$(cat "$sandbox/db_mode" 2>/dev/null || echo "skip")
   mkdir -p "$sandbox"
 
-  local envs="SANDBOX_DIR=$sandbox"
+  export SANDBOX_DIR="$sandbox"
   if [ "$db_mode" = "postgres" ]; then
     local conn="postgres://$PG_USER:$PG_PASS@localhost:5432/${PG_DB}_${name}"
-    envs="$envs DB_MODE=postgres DATABASE_URL=$conn"
+    export DB_MODE=postgres DATABASE_URL="$conn"
   elif [ "$db_mode" = "file" ]; then
-    envs="$envs DB_MODE=file"
+    export DB_MODE=file
   else
-    envs="$envs DB_MODE=skip"
+    export DB_MODE=skip
   fi
 
-  $envs nohup npx next start -p "$port" > "$sandbox/output.log" 2>&1 &
+  nohup npx next start -p "$port" > "$sandbox/output.log" 2>&1 &
   echo $! > "$sandbox/pid"
   echo "$port" > "$sandbox/port"
 }
@@ -302,15 +342,26 @@ docker_start_api() {
   local name=$1 port=$2
   local sandbox="$SANDBOX_DIR/$name"
   local db_port=$(find_port $((port + 1000)))
+  local ct
+  ct=$(cat "$sandbox/container_tool" 2>/dev/null || echo "docker")
   mkdir -p "$sandbox"
   echo "$port" > "$sandbox/port"
   echo "$db_port" > "$sandbox/db_port"
-  API_PORT=$port DB_PORT=$db_port docker compose -p "$name" -f "$COMPOSE_FILE" up -d
+  echo "$ct" > "$sandbox/container_tool"
+  if ! API_PORT=$port DB_PORT=$db_port $ct compose -p "$name" -f "$COMPOSE_FILE" up -d; then
+    echo "${ct} is not available or failed to start." >&2
+    echo "Run 'mysandbox create $name' again and choose a different option." >&2
+    safe_rm "$sandbox"
+    exit 1
+  fi
 }
 
 docker_stop_api() {
   local name=$1
-  docker compose -p "$name" -f "$COMPOSE_FILE" down -v 2>/dev/null || true
+  local sandbox="$SANDBOX_DIR/$name"
+  local ct
+  ct=$(cat "$sandbox/container_tool" 2>/dev/null || echo "docker")
+  $ct compose -p "$name" -f "$COMPOSE_FILE" down -v 2>/dev/null || true
 }
 
 docker_cleanup() {
@@ -318,17 +369,27 @@ docker_cleanup() {
   local sandbox="$SANDBOX_DIR/$name"
   stop_tunnel "$sandbox"
   docker_stop_api "$name"
-  rm -rf "$sandbox"
+  safe_rm "$sandbox"
 }
 
 docker_stop_all() {
+  # Check Docker projects
   local projects
   projects=$(docker ps -q --filter "label=com.docker.compose.project" --format '{{.Label "com.docker.compose.project"}}' 2>/dev/null | sort -u) || true
   for project in $projects; do
     sandbox="$SANDBOX_DIR/$project"
     if [ -d "$sandbox" ]; then
       echo "  stopping sandbox '$project'..."
-      docker_cleanup "$project"
+      docker_cleanup "$project" || true
+    fi
+  done
+  # Check Podman projects
+  projects=$(podman ps -q --filter "label=com.docker.compose.project" --format '{{.Label "com.docker.compose.project"}}' 2>/dev/null | sort -u) || true
+  for project in $projects; do
+    sandbox="$SANDBOX_DIR/$project"
+    if [ -d "$sandbox" ]; then
+      echo "  stopping sandbox '$project'..."
+      docker_cleanup "$project" || true
     fi
   done
 }
@@ -337,9 +398,16 @@ docker_stop_all() {
 
 print_info() {
   local name=$1 port=$2 url=$3 method=$4
+  local sandbox="$SANDBOX_DIR/$name"
+  local db_mode
+  db_mode=$(cat "$sandbox/db_mode" 2>/dev/null || echo "skip")
   echo "Sandbox '$name' is live."
   echo "  API  http://127.0.0.1:$port"
-  echo "  DB   postgresql://$PG_USER:$PG_PASS@localhost:5432/${PG_DB}_${name}"
+  if [ "$db_mode" = "file" ]; then
+    echo "  Store  $sandbox/calculations.json"
+  elif [ "$db_mode" = "postgres" ]; then
+    echo "  DB   postgresql://$PG_USER:$PG_PASS@localhost:5432/${PG_DB}_${name}"
+  fi
   if [ -n "$url" ]; then
     echo "  Public URL ($method): $url"
     echo "  SANDBOX_URL=$url"
@@ -468,19 +536,35 @@ case "${1:-}" in
     build_api
 
     if [ "$MODE" = "docker" ]; then
+      echo "  Starting container (Docker mode)..." >&2
       docker_start_api "$NAME" "$PORT"
     else
       resolve_db_mode "$NAME"
       db_mode=$(cat "$SANDBOX/db_mode")
       if [ "$db_mode" = "docker" ]; then
+        echo "  Starting container..." >&2
         docker_start_api "$NAME" "$PORT"
       else
+        echo "  Starting Next.js server..." >&2
         cli_start_api "$NAME" "$PORT"
       fi
     fi
 
     echo "Sandbox '$NAME' starting..."
     echo "  API  http://127.0.0.1:$PORT"
+
+    echo -n "  Waiting for server" >&2
+    waited=0
+    while [ $waited -lt 15 ]; do
+      if command -v curl &>/dev/null && curl -s -o /dev/null "http://127.0.0.1:$PORT/api/calculate" 2>/dev/null; then
+        echo " ready." >&2
+        break
+      fi
+      echo -n "." >&2
+      sleep 1
+      waited=$((waited + 1))
+    done
+    [ $waited -ge 15 ] && echo " (check logs: mysandbox logs $NAME)" >&2
 
     URL=$(start_tunnel "$PORT" "$SANDBOX" "$SANDBOX/tunnel_method" "$SANDBOX/tunnel_url" || true)
 
@@ -511,16 +595,32 @@ case "${1:-}" in
     build_api
 
     if [ "$MODE" = "docker" ]; then
+      echo "  Starting container (Docker mode)..." >&2
       docker_start_api "$NAME" "$PORT"
     else
       resolve_db_mode "$NAME"
       db_mode=$(cat "$SANDBOX/db_mode")
       if [ "$db_mode" = "docker" ]; then
+        echo "  Starting container..." >&2
         docker_start_api "$NAME" "$PORT"
       else
+        echo "  Starting Next.js server..." >&2
         cli_start_api "$NAME" "$PORT"
       fi
     fi
+
+    echo -n "  Waiting for server" >&2
+    waited=0
+    while [ $waited -lt 15 ]; do
+      if command -v curl &>/dev/null && curl -s -o /dev/null "http://127.0.0.1:$PORT/api/calculate" 2>/dev/null; then
+        echo " ready." >&2
+        break
+      fi
+      echo -n "." >&2
+      sleep 1
+      waited=$((waited + 1))
+    done
+    [ $waited -ge 15 ] && echo " (check logs: mysandbox logs $NAME)" >&2
 
     URL=$(start_tunnel "$PORT" "$SANDBOX" "$SANDBOX/tunnel_method" "$SANDBOX/tunnel_url" || true)
     METHOD=$(cat "$SANDBOX/tunnel_method" 2>/dev/null || echo "")
@@ -528,6 +628,7 @@ case "${1:-}" in
     ;;
 
   stop)
+    NAME="${2:-}"
     NAME="${2:-}"
     if [ -n "$NAME" ]; then
       echo "Stopping sandbox '$NAME'..."
@@ -550,7 +651,9 @@ case "${1:-}" in
     case "$MODE" in
       docker)
         docker ps --filter "label=com.docker.compose.project" \
-          --format "table {{.Names}}\t{{.Ports}}\t{{.Status}}" 2>/dev/null || echo "No sandboxes."
+          --format "table {{.Names}}\t{{.Ports}}\t{{.Status}}" 2>/dev/null
+        podman ps --filter "label=com.docker.compose.project" \
+          --format "table {{.Names}}\t{{.Ports}}\t{{.Status}}" 2>/dev/null
         ;;
       *)
         if ! [ -d "$SANDBOX_DIR" ]; then echo "No sandboxes."; exit 0; fi
