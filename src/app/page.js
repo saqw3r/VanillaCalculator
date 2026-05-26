@@ -1,5 +1,5 @@
 'use client';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 
 const C = '#F7F2EC', D = '#ECE1D9', U = '#E6D9CF', O = '#D6CAD6', S = '#C4B4C4', A = '#B8A9C9', T = '#3D3D3D';
 const API_BASE = process.env.NEXT_PUBLIC_API_URL;
@@ -8,6 +8,9 @@ export default function Home() {
   const [a, setA] = useState(''), [op, setOp] = useState(''), [b, setB] = useState('');
   const [r, setR] = useState(null), [loading, setLoading] = useState(false);
   const [mem, setMem] = useState(null);
+  const mounted = useRef(true);
+
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
 
   const disp = r !== null ? (typeof r === 'number' ? r : r) : b || a || '0';
   const expr = r !== null ? (op ? `${a} ${op} ${b} =` : '') : op ? `${a} ${op}${b ? ' ' + b : ''}` : '';
@@ -28,13 +31,14 @@ export default function Home() {
   const eq = async () => {
     if (!a || !b || !op || loading) return;
     setLoading(true);
-    const res = await fetch(`${API_BASE}/api/calculate`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ num1: +a, num2: +b, operation: op }),
-    });
-    const data = await res.json();
-    setR(data.error ?? data.result);
-    setLoading(false);
+    try {
+      const res = await fetch(`${API_BASE}/api/calculate`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ num1: +a, num2: +b, operation: op }),
+      });
+      const data = await res.json();
+      if (mounted.current) { setR(data.error ?? data.result); setLoading(false); }
+    } catch { if (mounted.current) setLoading(false); }
   };
 
   const unary = async fn => {
@@ -44,14 +48,18 @@ export default function Home() {
     if (val === 0 && fn === 'x⁻¹') { setR('Division by zero'); return; }
     if (val <= 0 && (fn === '√' || fn === 'log')) { setR('Invalid input'); return; }
     setLoading(true);
-    const res = await fetch(`${API_BASE}/api/calculate`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ num1: val, operation: fn }),
-    });
-    const data = await res.json();
-    if (data.error) { setR(data.error); }
-    else { setA(String(data.result)); setOp(''); setB(''); setR(data.result); }
-    setLoading(false);
+    try {
+      const res = await fetch(`${API_BASE}/api/calculate`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ num1: val, operation: fn }),
+      });
+      const data = await res.json();
+      if (mounted.current) {
+        if (data.error) { setR(data.error); }
+        else { setA(String(data.result)); setOp(''); setB(''); setR(data.result); }
+        setLoading(false);
+      }
+    } catch { if (mounted.current) setLoading(false); }
   };
 
   const clr = () => { setA(''); setOp(''); setB(''); setR(null); };
@@ -75,19 +83,23 @@ export default function Home() {
   const mr = () => { if (mem !== null) { setA(String(mem)); setOp(''); setB(''); setR(null); } };
   const mc = () => setMem(null);
 
+  const hRef = useRef();
+
+  hRef.current = e => {
+    if (e.ctrlKey || e.altKey || e.metaKey) return;
+    if (e.key >= '0' && e.key <= '9') { num(e.key); return; }
+    if (e.key === '.') { num('.'); return; }
+    if ('+-*/%^'.includes(e.key)) { pressOp(e.key); return; }
+    if (e.key === 'Enter' || e.key === '=') { e.preventDefault(); eq(); return; }
+    if (e.key === 'Backspace') { e.preventDefault(); back(); return; }
+    if (e.key === 'Escape' || e.key === 'Delete') { clr(); return; }
+  };
+
   useEffect(() => {
-    const h = e => {
-      if (e.ctrlKey || e.altKey || e.metaKey) return;
-      if (e.key >= '0' && e.key <= '9') { num(e.key); return; }
-      if (e.key === '.') { num('.'); return; }
-      if ('+-*/%^'.includes(e.key)) { pressOp(e.key); return; }
-      if (e.key === 'Enter' || e.key === '=') { e.preventDefault(); eq(); return; }
-      if (e.key === 'Backspace') { e.preventDefault(); back(); return; }
-      if (e.key === 'Escape' || e.key === 'Delete') { clr(); return; }
-    };
+    const h = e => hRef.current(e);
     window.addEventListener('keydown', h);
     return () => window.removeEventListener('keydown', h);
-  });
+  }, []);
 
   const R = [
     [['MC',mc,U],['MR',mr,U],['MS',ms,U],['M+',mPlus,U]],
