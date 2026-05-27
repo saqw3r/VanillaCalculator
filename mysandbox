@@ -418,11 +418,13 @@ cmd_install() {
   mkdir -p "$HOME/.local/bin"
   local dest="$HOME/.local/bin/mysandbox" installed=""
 
-  # On Windows, generate a .cmd wrapper with the real repo path
-  # (symlinks don't resolve correctly via Git Bash on Windows)
+  # On Windows, generate both a .cmd shim (cmd.exe/PowerShell) and a
+  # bash wrapper (Git Bash) — symlinks don't resolve correctly via MINGW.
   if [[ "$(uname -s)" =~ ^(MINGW|MSYS|CYGWIN) ]]; then
     local win_src
     win_src="$(cygpath -m "$SCRIPT_DIR/mysandbox" 2>/dev/null || echo "$SCRIPT_DIR/mysandbox")"
+
+    # .cmd shim — for cmd.exe / PowerShell (finds bash.exe via PATHEXT)
     cat > "$HOME/.local/bin/mysandbox.cmd" << 'CMDEOF'
 @echo off
 setlocal enabledelayedexpansion
@@ -445,21 +447,34 @@ exit /b 1
 "%BASH%" "__SANDBOX_PATH__" %*
 CMDEOF
     sed -i "s|__SANDBOX_PATH__|${win_src}|g" "$HOME/.local/bin/mysandbox.cmd"
-    installed="$HOME/.local/bin/mysandbox.cmd"
+
+    # Bash wrapper — so Git Bash can resolve `mysandbox` from PATH
+    cat > "$dest" << BASHWRAP
+#!/usr/bin/env bash
+exec "${win_src}" "\$@"
+BASHWRAP
+    chmod +x "$dest"
+
+    installed="$dest ($HOME/.local/bin/mysandbox.cmd)"
   else
     # Linux / macOS — symlink the bash script
     ln -sf "$src" "$dest"
     installed="$dest"
   fi
 
-  if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]] && [ -n "$rc_file" ]; then
-    echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$rc_file"
-    echo "Added ~/.local/bin to PATH in $rc_file"
+  if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
+    if [ -n "$rc_file" ]; then
+      echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$rc_file"
+      echo "Added ~/.local/bin to PATH in $rc_file"
+    else
+      rc_file="$HOME/.bash_profile"
+      echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$rc_file"
+      echo "Added ~/.local/bin to PATH in $rc_file (created)"
+    fi
+    export PATH="$HOME/.local/bin:$PATH"
   fi
   echo "Installed mysandbox → $installed"
-  if [ -n "$rc_file" ]; then
-    echo "Run 'source $rc_file' or restart your shell to use it."
-  fi
+  echo "Run 'source $rc_file' in new shells, or use 'mysandbox' right now."
 }
 
 cmd_uninstall() {
@@ -531,18 +546,23 @@ case "${1:-}" in
     echo "Sandbox '$NAME' starting..."
     echo "  API  http://127.0.0.1:$PORT"
 
-    echo -n "  Waiting for server" >&2
+    printf "  Waiting for server" >&2
     waited=0
+    frames=('.   ' '..  ' '... ')
     while [ $waited -lt 15 ]; do
       if command -v curl &>/dev/null && curl -s -o /dev/null "http://127.0.0.1:$PORT/api/calculate" 2>/dev/null; then
-        echo " ready." >&2
+        printf "\r  Waiting for server      " >&2
+        printf "\r  Almost ready...         \n" >&2
         break
       fi
-      echo -n "." >&2
+      printf "\r  Waiting for server %s" "${frames[$((waited % 3))]}" >&2
       sleep 1
       waited=$((waited + 1))
     done
-    [ $waited -ge 15 ] && echo " (check logs: mysandbox logs $NAME)" >&2
+    if [ $waited -ge 15 ]; then
+      printf "\r  Waiting for server      " >&2
+      echo " (check logs: mysandbox logs $NAME)" >&2
+    fi
 
     URL=$(start_tunnel "$PORT" "$SANDBOX" "$SANDBOX/tunnel_method" "$SANDBOX/tunnel_url" || true)
 
@@ -587,18 +607,23 @@ case "${1:-}" in
       fi
     fi
 
-    echo -n "  Waiting for server" >&2
+    printf "  Waiting for server" >&2
     waited=0
+    frames=('.   ' '..  ' '... ')
     while [ $waited -lt 15 ]; do
       if command -v curl &>/dev/null && curl -s -o /dev/null "http://127.0.0.1:$PORT/api/calculate" 2>/dev/null; then
-        echo " ready." >&2
+        printf "\r  Waiting for server      " >&2
+        printf "\r  Almost ready...         \n" >&2
         break
       fi
-      echo -n "." >&2
+      printf "\r  Waiting for server %s" "${frames[$((waited % 3))]}" >&2
       sleep 1
       waited=$((waited + 1))
     done
-    [ $waited -ge 15 ] && echo " (check logs: mysandbox logs $NAME)" >&2
+    if [ $waited -ge 15 ]; then
+      printf "\r  Waiting for server      " >&2
+      echo " (check logs: mysandbox logs $NAME)" >&2
+    fi
 
     URL=$(start_tunnel "$PORT" "$SANDBOX" "$SANDBOX/tunnel_method" "$SANDBOX/tunnel_url" || true)
     METHOD=$(cat "$SANDBOX/tunnel_method" 2>/dev/null || echo "")

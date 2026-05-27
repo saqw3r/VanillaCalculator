@@ -308,24 +308,15 @@ sudo ln -s "$(pwd)/mysandbox" /usr/local/bin/mysandbox
 
 Requires **Git Bash** (from [Git for Windows](https://git-scm.com)) or **WSL**.
 
-**Option A — run `mysandbox.ps1` in PowerShell (adds to PATH):**
+**First-time install** — from the repo directory, run `mysandbox install`. The repo-root `mysandbox.cmd` finds Git Bash and bootstraps the install:
 
-```powershell
-powershell -ExecutionPolicy Bypass -File mysandbox.ps1
+```shell
+mysandbox install
 ```
 
-Now `mysandbox` works from any terminal — the `.cmd` shim automatically finds Git Bash.
+This generates a hardcoded `.cmd` shim at `~/.local/bin/mysandbox.cmd` and adds `~/.local/bin` to `PATH`. After that, `mysandbox` works from any terminal.
 
-**Option B — manual PATH addition:**
-
-```powershell
-# Add this to your PowerShell $PROFILE:
-$env:Path += ";C:\path\to\VanillaCalculator"
-```
-
-**Option C — standalone (no bash):**
-
-The `.cmd` shim (`mysandbox.cmd`) can be invoked directly from any `cmd.exe` or PowerShell terminal if Git Bash is installed.
+If you only need to use it from the repo directory, no install is needed — `mysandbox.cmd` resolves `%~dp0mysandbox` to the bash script in the same folder.
 
 ### Uninstall
 
