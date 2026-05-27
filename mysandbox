@@ -172,8 +172,7 @@ stop_tunnel() {
 
 build_api() {
   if [ ! -f "$SCRIPT_DIR/.next/build-manifest.json" ]; then
-    echo "Building Next.js app..."
-    (cd "$SCRIPT_DIR" && npm run build)
+    "$SCRIPT_DIR/setup.sh" build
   fi
 }
 
@@ -185,15 +184,9 @@ resolve_db_mode() {
   mkdir -p "$sandbox"
 
   # Try PostgreSQL
-  if command -v psql &>/dev/null; then
-    if sudo -n -u postgres psql -c "CREATE DATABASE ${PG_DB}_${name} OWNER $PG_USER;" 2>/dev/null; then
-      echo "postgres" > "$sandbox/db_mode"
-      return
-    fi
-    if psql -U "$PG_USER" -c "CREATE DATABASE ${PG_DB}_${name} OWNER $PG_USER;" 2>/dev/null; then
-      echo "postgres" > "$sandbox/db_mode"
-      return
-    fi
+  if "$SCRIPT_DIR/setup.sh" db-create "${PG_DB}_${name}" "$PG_USER"; then
+    echo "postgres" > "$sandbox/db_mode"
+    return
   fi
 
   # PostgreSQL not available — interactive prompt
@@ -279,10 +272,7 @@ resolve_db_mode() {
 
 cli_drop_db() {
   local name=$1
-  if command -v psql &>/dev/null; then
-    sudo -n -u postgres psql -c "DROP DATABASE IF EXISTS ${PG_DB}_${name};" 2>/dev/null ||
-    psql -U "$PG_USER" -c "DROP DATABASE IF EXISTS ${PG_DB}_${name};" 2>/dev/null || true
-  fi
+  "$SCRIPT_DIR/setup.sh" db-drop "${PG_DB}_${name}" "$PG_USER"
 }
 
 cli_start_api() {
@@ -291,19 +281,7 @@ cli_start_api() {
   local db_mode
   db_mode=$(cat "$sandbox/db_mode" 2>/dev/null || echo "skip")
   mkdir -p "$sandbox"
-
-  export SANDBOX_DIR="$sandbox"
-  if [ "$db_mode" = "postgres" ]; then
-    local conn="postgres://$PG_USER:$PG_PASS@localhost:5432/${PG_DB}_${name}"
-    export DB_MODE=postgres DATABASE_URL="$conn"
-  elif [ "$db_mode" = "file" ]; then
-    export DB_MODE=file
-  else
-    export DB_MODE=skip
-  fi
-
-  nohup npx next start -p "$port" > "$sandbox/output.log" 2>&1 &
-  echo $! > "$sandbox/pid"
+  "$SCRIPT_DIR/setup.sh" start "$port" "$db_mode" "$sandbox"
   echo "$port" > "$sandbox/port"
 }
 
@@ -345,15 +323,15 @@ docker_start_api() {
   local ct
   ct=$(cat "$sandbox/container_tool" 2>/dev/null || echo "docker")
   mkdir -p "$sandbox"
-  echo "$port" > "$sandbox/port"
-  echo "$db_port" > "$sandbox/db_port"
-  echo "$ct" > "$sandbox/container_tool"
-  if ! API_PORT=$port DB_PORT=$db_port $ct compose -p "$name" -f "$COMPOSE_FILE" up -d; then
+  if ! "$SCRIPT_DIR/setup.sh" compose-start "$name" "$port" "$db_port" "$COMPOSE_FILE" "$ct"; then
     echo "${ct} is not available or failed to start." >&2
     echo "Run 'mysandbox create $name' again and choose a different option." >&2
     safe_rm "$sandbox"
     exit 1
   fi
+  echo "$port" > "$sandbox/port"
+  echo "$db_port" > "$sandbox/db_port"
+  echo "$ct" > "$sandbox/container_tool"
 }
 
 docker_stop_api() {
@@ -361,7 +339,7 @@ docker_stop_api() {
   local sandbox="$SANDBOX_DIR/$name"
   local ct
   ct=$(cat "$sandbox/container_tool" 2>/dev/null || echo "docker")
-  $ct compose -p "$name" -f "$COMPOSE_FILE" down -v 2>/dev/null || true
+  "$SCRIPT_DIR/setup.sh" compose-stop "$name" "$COMPOSE_FILE" "$ct"
 }
 
 docker_cleanup() {
