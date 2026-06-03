@@ -13,5 +13,8 @@
     "pg": "^8.13.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "bats": "^1.13.0"
   }
 }

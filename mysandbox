@@ -287,7 +287,7 @@ cli_start_api() {
 
 cli_stop_api() {
   local sandbox=$1
-  [ -f "$sandbox/pid" ] && kill "$(cat "$sandbox/pid")" 2>/dev/null
+  [ -f "$sandbox/pid" ] && kill "$(cat "$sandbox/pid")" 2>/dev/null || true
   sleep 1
 }
 
@@ -631,7 +631,6 @@ case "${1:-}" in
     ;;
 
   stop)
-    NAME="${2:-}"
     NAME="${2:-}"
     if [ -n "$NAME" ]; then
       echo "Stopping sandbox '$NAME'..."
