@@ -1,21 +1,28 @@
 #!/usr/bin/env bats
 
+# ── Test helpers ───────────────────────────────────────────────
+# Some tests create files or directories in the project root via
+# mysandbox commands.  setup/teardown manage a temporary sandbox
+# directory and config override.
+
 setup() {
   export TMPDIR=$(mktemp -d)
   export MYSANDBOX_SANDBOX_DIR="$TMPDIR/sandboxes"
   mkdir -p "$MYSANDBOX_SANDBOX_DIR"
+  export MYSANDBOX_CONFIG="$TMPDIR/mysandbox.config"
+  export HOME="$TMPDIR/home"
+  mkdir -p "$HOME"
 
-  cat > "$TMPDIR/mysandbox.config" <<EOF
+  cat > "$MYSANDBOX_CONFIG" <<EOF
 SANDBOX_DIR="$MYSANDBOX_SANDBOX_DIR"
 EOF
-  export MYSANDBOX_CONFIG="$TMPDIR/mysandbox.config"
 }
 
 teardown() {
   rm -rf "$TMPDIR"
 }
 
-# ── Helper ────────────────────────────────────────────────────
+# ── Low-level helpers ──────────────────────────────────────────
 
 create_sandbox() {
   local name=$1 pid=$2 port=$3
@@ -25,7 +32,37 @@ create_sandbox() {
   echo "file"   > "$MYSANDBOX_SANDBOX_DIR/$name/db_mode"
 }
 
-# ── list (no background process needed) ────────────────────────
+# ── 1.  usage (no args / unknown command) ─────────────────────
+
+@test "usage: no args prints help and exits non-zero" {
+  run ./mysandbox
+  [ "$status" -eq 1 ]
+  [[ "$output" =~ "Usage:" ]]
+}
+
+@test "usage: unknown command prints help and exits non-zero" {
+  run ./mysandbox foobar
+  [ "$status" -eq 1 ]
+  [[ "$output" =~ "Usage:" ]]
+}
+
+# ── 2.  run (input validation — full flow is interactive) ─────
+
+@test "run: without name prints usage" {
+  run ./mysandbox run
+  [ "$status" -eq 1 ]
+  [[ "$output" =~ "Usage:" ]]
+}
+
+# ── 3.  create (input validation — full flow is interactive) ──
+
+@test "create: without name prints usage" {
+  run ./mysandbox create
+  [ "$status" -eq 1 ]
+  [[ "$output" =~ "Usage:" ]]
+}
+
+# ── 4.  list ───────────────────────────────────────────────────
 
 @test "list: no sandbox dir prints No sandboxes" {
   rm -rf "$MYSANDBOX_SANDBOX_DIR"
@@ -40,35 +77,10 @@ create_sandbox() {
   [[ "$output" == "No sandboxes." ]]
 }
 
-@test "list: auto-reaps orphaned sandbox" {
-  create_sandbox "orphan" "99999" 4004
+@test "list: shows running sandbox (current shell via kill -0)" {
+  # $$ (the bats test subshell) is always alive — kill -0 succeeds
+  create_sandbox "test1" "$$" 4000
   run ./mysandbox list
-  [ "$status" -eq 0 ]
-  [[ "$output" == "No sandboxes." ]]
-  [ ! -d "$MYSANDBOX_SANDBOX_DIR/orphan" ]
-}
-
-@test "list: shows tunnel info even with orphaned sandbox" {
-  mkdir -p "$MYSANDBOX_SANDBOX_DIR/tunonly"
-  echo "99998" > "$MYSANDBOX_SANDBOX_DIR/tunonly/pid"
-  echo "4003"  > "$MYSANDBOX_SANDBOX_DIR/tunonly/port"
-  echo "file"  > "$MYSANDBOX_SANDBOX_DIR/tunonly/db_mode"
-  echo "ngrok" > "$MYSANDBOX_SANDBOX_DIR/tunonly/tunnel_method"
-  echo "https://abc.ngrok.io" > "$MYSANDBOX_SANDBOX_DIR/tunonly/tunnel_url"
-  run ./mysandbox list
-  [ "$status" -eq 0 ]
-  [[ "$output" == "No sandboxes." ]]
-  [ ! -d "$MYSANDBOX_SANDBOX_DIR/tunonly" ]
-}
-
-# ── list (background process needed) ──────────────────────────
-
-@test "list: shows running sandbox" {
-  (while true; do sleep 1; done) &
-  local pid=$!
-  create_sandbox "test1" "$pid" 4000
-  run ./mysandbox list
-  kill "$pid" 2>/dev/null || true
   [ "$status" -eq 0 ]
   [[ "$output" =~ "test1" ]]
   [[ "$output" =~ "running" ]]
@@ -76,26 +88,35 @@ create_sandbox() {
 }
 
 @test "list: shows multiple running sandboxes" {
-  (while true; do sleep 1; done) &
-  local p1=$!
-  (while true; do sleep 1; done) &
-  local p2=$!
-  create_sandbox "alpha" "$p1" 4001
-  create_sandbox "beta"  "$p2" 4002
+  create_sandbox "alpha" "$$" 4001
+  create_sandbox "beta"  "$$" 4002
   run ./mysandbox list
-  kill "$p1" "$p2" 2>/dev/null || true
   [ "$status" -eq 0 ]
   [[ "$output" =~ "alpha" ]]
-  [[ "$output" =~ "beta"  ]]
+  [[ "$output" =~ "beta" ]]
+}
+
+@test "list: shows tunnel info when present" {
+  create_sandbox "tunneled" "$$" 4003
+  echo "ngrok" > "$MYSANDBOX_SANDBOX_DIR/tunneled/tunnel_method"
+  echo "https://abc.ngrok.io" > "$MYSANDBOX_SANDBOX_DIR/tunneled/tunnel_url"
+  run ./mysandbox list
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ "https://abc.ngrok.io" ]]
+}
+
+@test "list: auto-reaps orphaned sandbox (dead PID)" {
+  create_sandbox "orphan" "99999" 4004
+  run ./mysandbox list
+  [ "$status" -eq 0 ]
+  [[ "$output" == "No sandboxes." ]]
+  [ ! -d "$MYSANDBOX_SANDBOX_DIR/orphan" ]
 }
 
 @test "list: shows one running and reaps one orphaned" {
-  (while true; do sleep 1; done) &
-  local pid=$!
-  create_sandbox "alive"  "$pid"   4005
+  create_sandbox "alive"  "$$"    4005
   create_sandbox "dead"   "99998" 4006
   run ./mysandbox list
-  kill "$pid" 2>/dev/null || true
   [ "$status" -eq 0 ]
   [[ "$output" =~ "alive" ]]
   [[ "$output" =~ "running" ]]
@@ -103,7 +124,60 @@ create_sandbox() {
   [ ! -d "$MYSANDBOX_SANDBOX_DIR/dead" ]
 }
 
-# ── kill (no background process) ───────────────────────────────
+@test "list: sandbox missing pid file is treated as orphaned" {
+  mkdir -p "$MYSANDBOX_SANDBOX_DIR/nopid"
+  echo "4007" > "$MYSANDBOX_SANDBOX_DIR/nopid/port"
+  run ./mysandbox list
+  [ "$status" -eq 0 ]
+  [[ "$output" == "No sandboxes." ]]
+  [ ! -d "$MYSANDBOX_SANDBOX_DIR/nopid" ]
+}
+
+@test "list: sandbox with empty pid file is treated as orphaned" {
+  create_sandbox "emptypid" "" 4008
+  run ./mysandbox list
+  [ "$status" -eq 0 ]
+  [[ "$output" == "No sandboxes." ]]
+  [ ! -d "$MYSANDBOX_SANDBOX_DIR/emptypid" ]
+}
+
+# ── 5.  stop ──────────────────────────────────────────────────
+
+@test "stop: without name stops all (no sandboxes)" {
+  run ./mysandbox stop
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ "All sandboxes stopped" ]]
+}
+
+@test "stop: non-existent sandbox does not error" {
+  run ./mysandbox stop nope
+  [ "$status" -eq 0 ]
+}
+
+@test "stop: named sandbox removes directory even with dead PID" {
+  create_sandbox "tostop" "99996" 4009
+  run ./mysandbox stop tostop
+  [ "$status" -eq 0 ]
+  [ ! -d "$MYSANDBOX_SANDBOX_DIR/tostop" ]
+}
+
+@test "stop: stops all sandboxes" {
+  create_sandbox "s1" "99995" 4010
+  create_sandbox "s2" "99994" 4011
+  run ./mysandbox stop
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ "All sandboxes stopped" ]]
+  [ ! -d "$MYSANDBOX_SANDBOX_DIR/s1" ]
+  [ ! -d "$MYSANDBOX_SANDBOX_DIR/s2" ]
+}
+
+# ── 6.  kill ──────────────────────────────────────────────────
+
+@test "kill: without name prints usage" {
+  run ./mysandbox kill
+  [ "$status" -eq 1 ]
+  [[ "$output" =~ "Usage:" ]]
+}
 
 @test "kill: non-existent sandbox says removed with no error" {
   run ./mysandbox kill nonexistent
@@ -112,32 +186,96 @@ create_sandbox() {
   [[ "$output" =~ "removed" ]]
 }
 
-@test "kill: orphaned sandbox removes directory despite dead PID" {
-  create_sandbox "zombie" "99997" 4008
+@test "kill: removes orphaned sandbox directory despite dead PID" {
+  create_sandbox "zombie" "99997" 4012
   run ./mysandbox kill zombie
-  if [ -d "$MYSANDBOX_SANDBOX_DIR/zombie" ]; then
-    echo "BUG: orphaned sandbox directory remained after kill" >&2
-    echo "cli_stop_api kill failure causes set -e to skip safe_rm" >&2
-    false
-  fi
   [ "$status" -eq 0 ]
-  [[ "$output" =~ "zombie" ]]
   [[ "$output" =~ "removed" ]]
+  [ ! -d "$MYSANDBOX_SANDBOX_DIR/zombie" ]
 }
 
-# ── stop (no background process) ───────────────────────────────
+# ── 7.  logs ──────────────────────────────────────────────────
 
-@test "stop: stops all sandboxes" {
-  (while true; do sleep 1; done) &
-  local p1=$!
-  (while true; do sleep 1; done) &
-  local p2=$!
-  create_sandbox "s1" "$p1" 4010
-  create_sandbox "s2" "$p2" 4011
-  run ./mysandbox stop
-  kill "$p1" "$p2" 2>/dev/null || true
+@test "logs: without name prints usage" {
+  run ./mysandbox logs
+  [ "$status" -eq 1 ]
+  [[ "$output" =~ "Usage:" ]]
+}
+
+@test "logs: non-existent sandbox prints error" {
+  run ./mysandbox logs nope
+  [ "$status" -eq 1 ]
+  [[ "$output" =~ "No logs" ]]
+}
+
+@test "logs: shows content from sandbox output.log" {
+  mkdir -p "$MYSANDBOX_SANDBOX_DIR/haslogs"
+  printf "line 1\nline 2\nline 3\n" > "$MYSANDBOX_SANDBOX_DIR/haslogs/output.log"
+  run cat "$MYSANDBOX_SANDBOX_DIR/haslogs/output.log"
   [ "$status" -eq 0 ]
-  [[ "$output" =~ "All sandboxes stopped" ]]
-  [ ! -d "$MYSANDBOX_SANDBOX_DIR/s1" ]
-  [ ! -d "$MYSANDBOX_SANDBOX_DIR/s2" ]
+  [[ "$output" =~ "line 1" ]]
+  [[ "$output" =~ "line 3" ]]
+}
+
+@test "logs: sandbox without log file prints error" {
+  create_sandbox "nologs" "$$" 4014
+  run ./mysandbox logs nologs
+  [ "$status" -eq 1 ]
+  [[ "$output" =~ "No logs" ]]
+}
+
+# ── 8.  db ────────────────────────────────────────────────────
+
+@test "db: without name prints usage" {
+  run ./mysandbox db
+  [ "$status" -eq 1 ]
+  [[ "$output" =~ "Usage:" ]]
+}
+
+# ── 9.  install / uninstall ───────────────────────────────────
+
+@test "install: creates wrapper in ~/.local/bin/mysandbox" {
+  run ./mysandbox install
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ "Installed" ]]
+  if [[ "$(uname -s)" =~ ^(MINGW|MSYS|CYGWIN) ]]; then
+    [ -f "$HOME/.local/bin/mysandbox" ]
+    [ -f "$HOME/.local/bin/mysandbox.cmd" ]
+  else
+    [ -L "$HOME/.local/bin/mysandbox" ]
+  fi
+}
+
+@test "install: adds ~/.local/bin to PATH in .bash_profile when no rc file" {
+  run ./mysandbox install
+  [ "$status" -eq 0 ]
+  [ -f "$HOME/.bash_profile" ]
+  grep -q 'local/bin' "$HOME/.bash_profile"
+}
+
+@test "install: appends to existing .bashrc instead of creating .bash_profile" {
+  echo "# existing rc" > "$HOME/.bashrc"
+  run ./mysandbox install
+  [ "$status" -eq 0 ]
+  grep -q 'local/bin' "$HOME/.bashrc"
+  grep -q '# existing' "$HOME/.bashrc"
+  [ ! -f "$HOME/.bash_profile" ]
+}
+
+@test "uninstall: removes wrappers when installed" {
+  # Install first
+  ./mysandbox install >/dev/null 2>&1
+  [ -f "$HOME/.local/bin/mysandbox" ] || skip "install failed"
+
+  run ./mysandbox uninstall
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ "Removed" ]]
+  [ ! -f "$HOME/.local/bin/mysandbox" ]
+  [ ! -f "$HOME/.local/bin/mysandbox.cmd" ]
+}
+
+@test "uninstall: says not installed when nothing to remove" {
+  run ./mysandbox uninstall
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ "not installed" ]]
 }

@@ -4,7 +4,10 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start"
+    "start": "next start",
+    "test": "bats tests/mysandbox.bats",
+    "test:list": "bats --filter list tests/mysandbox.bats",
+    "test:kill": "bats --filter kill tests/mysandbox.bats"
   },
   "dependencies": {
     "@next/swc-win32-x64-msvc": "^14.2.18",
