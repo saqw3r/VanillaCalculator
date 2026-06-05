@@ -577,9 +577,9 @@ case "${1:-}" in
     echo ""
     echo "Press Ctrl+C to stop the sandbox and clean up."
 
-    trap "echo ''; echo 'Stopping sandbox...'; case \"\$MODE\" in docker) docker_cleanup \"\$NAME\" ;; *) cli_cleanup \"\$NAME\" ;; esac; echo 'Done.'; exit 0" INT TERM
+    trap "echo ''; echo 'Stopping sandbox...'; case \"\$MODE\" in docker) docker_cleanup \"\$NAME\" ;; *) cli_cleanup \"\$NAME\" ;; esac; echo 'Done.'; exit 0" INT TERM HUP
 
-    while true; do sleep 1; done
+    sleep infinity 2>/dev/null || while true; do sleep 1; done
     ;;
 
   create)
