@@ -15,6 +15,9 @@ if [ ! -f "$SCRIPT_DIR/package.json" ]; then
   SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 fi
 
+# Ensure setup.sh is executable
+[ -x "$SCRIPT_DIR/setup.sh" ] || chmod +x "$SCRIPT_DIR/setup.sh" 2>/dev/null || true
+
 COMPOSE_FILE="$SCRIPT_DIR/docker-compose.yml"
 SANDBOX_DIR="/tmp/mysandbox"
 
@@ -208,29 +211,47 @@ resolve_db_mode() {
 
   case "$choice" in
     2)
-      local ct=""
-      if command -v docker &>/dev/null && docker info &>/dev/null 2>&1; then
-        ct="docker"
-      fi
-      if command -v podman &>/dev/null && podman info &>/dev/null 2>&1; then
-        if [ "$ct" = "docker" ]; then
-          echo "" >&2
-          echo "Both Docker and Podman are available." >&2
-          echo "Which container runtime to use?" >&2
-          echo "  1) Docker" >&2
-          echo "  2) Podman" >&2
-          echo "" >&2
-          local rt_choice
-          read -p "Choose [1/2] (default: 1): " rt_choice
-          rt_choice="${rt_choice:-1}"
-          ct="docker"
-          [ "$rt_choice" = "2" ] && ct="podman"
-        else
-          ct="podman"
-        fi
-      fi
+      local ct="" docker_bin="" podman_bin=""
+      command -v docker &>/dev/null && docker_bin="docker"
+      command -v podman &>/dev/null && podman_bin="podman"
 
-      if [ -z "$ct" ]; then
+      # Check if a running daemon is accessible first
+      local docker_ok=false podman_ok=false
+      [ -n "$docker_bin" ] && docker info &>/dev/null 2>&1 && docker_ok=true
+      [ -n "$podman_bin" ] && podman info &>/dev/null 2>&1 && podman_ok=true
+
+      if $docker_ok && $podman_ok; then
+        echo "" >&2
+        echo "Both Docker and Podman are available." >&2
+        echo "Which container runtime to use?" >&2
+        echo "  1) Docker" >&2
+        echo "  2) Podman" >&2
+        echo "" >&2
+        local rt_choice
+        read -p "Choose [1/2] (default: 1): " rt_choice
+        rt_choice="${rt_choice:-1}"
+        ct="docker"
+        [ "$rt_choice" = "2" ] && ct="podman"
+      elif $docker_ok; then
+        ct="docker"
+      elif $podman_ok; then
+        ct="podman"
+      elif [ -n "$docker_bin" ] || [ -n "$podman_bin" ]; then
+        echo "" >&2
+        echo "Container runtime is installed but not running." >&2
+        echo "" >&2
+        if [ -n "$docker_bin" ]; then
+          echo "  Docker found at: $(command -v docker)" >&2
+          echo "  Start Docker Desktop and try again." >&2
+        fi
+        if [ -n "$podman_bin" ]; then
+          echo "  Podman found at: $(command -v podman)" >&2
+          echo "  Run 'podman machine start' and try again." >&2
+        fi
+        echo "" >&2
+        echo "Or choose a different option when creating the sandbox." >&2
+        exit 1
+      else
         echo "" >&2
         echo "No container runtime (Docker or Podman) is installed." >&2
         echo "" >&2

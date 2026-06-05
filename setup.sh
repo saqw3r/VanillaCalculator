@@ -19,6 +19,11 @@ if [ ! -f "$SCRIPT_DIR/package.json" ]; then
   SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 fi
 
+# Ensure this script and mysandbox are executable
+for _f in "$SCRIPT_DIR/setup.sh" "$SCRIPT_DIR/mysandbox"; do
+  [ -x "$_f" ] || chmod +x "$_f" 2>/dev/null || true
+done
+
 # ── Environment Specifications ─────────────────────────────────────────────
 
 MIN_NODE="18.0.0"
