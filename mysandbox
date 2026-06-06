@@ -186,23 +186,31 @@ resolve_db_mode() {
   local sandbox="$SANDBOX_DIR/$name"
   mkdir -p "$sandbox"
 
-  # Try PostgreSQL
-  if "$SCRIPT_DIR/setup.sh" db-create "${PG_DB}_${name}" "$PG_USER"; then
-    echo "postgres" > "$sandbox/db_mode"
-    return
+  local pg_available=false
+  if "$SCRIPT_DIR/setup.sh" db-check "${PG_DB}_${name}" "$PG_USER" 2>/dev/null; then
+    pg_available=true
   fi
 
-  # PostgreSQL not available — interactive prompt
+  local docker_ok=false podman_ok=false
+  command -v docker &>/dev/null && docker info &>/dev/null 2>&1 && docker_ok=true
+  command -v podman &>/dev/null && podman info &>/dev/null 2>&1 && podman_ok=true
+
   echo "" >&2
   echo "╔══════════════════════════════════════════════════════════╗" >&2
-  echo "║  PostgreSQL (psql) is not available on this system.    ║" >&2
-  echo "║  The API needs a database to persist calculations.    ║" >&2
+  echo "║  How should this sandbox store data?                   ║" >&2
   echo "╚══════════════════════════════════════════════════════════╝" >&2
   echo "" >&2
-  echo "How should this sandbox store data?" >&2
   echo "  1) File-based store (no setup) — persists to a local JSON file" >&2
-  echo "  2) Container mode — runs PostgreSQL in a Docker or Podman container" >&2
-  echo "  3) Install PostgreSQL — show setup instructions" >&2
+  if $docker_ok || $podman_ok; then
+    echo "  2) Container mode — PostgreSQL in Docker/Podman container" >&2
+  else
+    echo "  2) Container mode — requires Docker or Podman (not detected)" >&2
+  fi
+  if $pg_available; then
+    echo "  3) PostgreSQL (existing system installation)" >&2
+  else
+    echo "  3) Install PostgreSQL — show setup instructions" >&2
+  fi
   echo "  s) Skip — run without persistence" >&2
   echo "" >&2
   local choice
@@ -210,16 +218,11 @@ resolve_db_mode() {
   choice="${choice:-1}"
 
   case "$choice" in
+    1)
+      echo "file" > "$sandbox/db_mode"
+      echo "  Using file-based store." >&2
+      ;;
     2)
-      local ct="" docker_bin="" podman_bin=""
-      command -v docker &>/dev/null && docker_bin="docker"
-      command -v podman &>/dev/null && podman_bin="podman"
-
-      # Check if a running daemon is accessible first
-      local docker_ok=false podman_ok=false
-      [ -n "$docker_bin" ] && docker info &>/dev/null 2>&1 && docker_ok=true
-      [ -n "$podman_bin" ] && podman info &>/dev/null 2>&1 && podman_ok=true
-
       if $docker_ok && $podman_ok; then
         echo "" >&2
         echo "Both Docker and Podman are available." >&2
@@ -230,30 +233,22 @@ resolve_db_mode() {
         local rt_choice
         read -p "Choose [1/2] (default: 1): " rt_choice
         rt_choice="${rt_choice:-1}"
-        ct="docker"
+        local ct="docker"
         [ "$rt_choice" = "2" ] && ct="podman"
+        echo "$ct" > "$sandbox/container_tool"
+        echo "docker" > "$sandbox/db_mode"
+        echo "  Using ${ct} to run the database container." >&2
       elif $docker_ok; then
-        ct="docker"
+        echo "docker" > "$sandbox/container_tool"
+        echo "docker" > "$sandbox/db_mode"
+        echo "  Using Docker to run the database container." >&2
       elif $podman_ok; then
-        ct="podman"
-      elif [ -n "$docker_bin" ] || [ -n "$podman_bin" ]; then
-        echo "" >&2
-        echo "Container runtime is installed but not running." >&2
-        echo "" >&2
-        if [ -n "$docker_bin" ]; then
-          echo "  Docker found at: $(command -v docker)" >&2
-          echo "  Start Docker Desktop and try again." >&2
-        fi
-        if [ -n "$podman_bin" ]; then
-          echo "  Podman found at: $(command -v podman)" >&2
-          echo "  Run 'podman machine start' and try again." >&2
-        fi
-        echo "" >&2
-        echo "Or choose a different option when creating the sandbox." >&2
-        exit 1
+        echo "podman" > "$sandbox/container_tool"
+        echo "docker" > "$sandbox/db_mode"
+        echo "  Using Podman to run the database container." >&2
       else
         echo "" >&2
-        echo "No container runtime (Docker or Podman) is installed." >&2
+        echo "No running container runtime found." >&2
         echo "" >&2
         echo "To install Docker:" >&2
         echo "  https://docs.docker.com/engine/install/" >&2
@@ -266,27 +261,30 @@ resolve_db_mode() {
         echo "After installing, run 'mysandbox create $name' again." >&2
         exit 1
       fi
-
-      echo "$ct" > "$sandbox/container_tool"
-      echo "docker" > "$sandbox/db_mode"
-      echo "  Using ${ct} to run the database container." >&2
       ;;
     3)
-      echo "" >&2
-      echo "To install PostgreSQL:" >&2
-      echo "  Linux (Debian/Ubuntu): sudo apt install postgresql postgresql-client" >&2
-      echo "  macOS: brew install postgresql" >&2
-      echo "  Windows: https://www.postgresql.org/download/windows/" >&2
-      echo "" >&2
-      echo "After installing, run 'psql -U postgres' to verify," >&2
-      echo "then create this sandbox again." >&2
-      exit 1
+      if $pg_available; then
+        "$SCRIPT_DIR/setup.sh" db-create "${PG_DB}_${name}" "$PG_USER"
+        echo "postgres" > "$sandbox/db_mode"
+        echo "  Using existing PostgreSQL." >&2
+      else
+        echo "" >&2
+        echo "To install PostgreSQL:" >&2
+        echo "  Linux (Debian/Ubuntu): sudo apt install postgresql postgresql-client" >&2
+        echo "  macOS: brew install postgresql" >&2
+        echo "  Windows: https://www.postgresql.org/download/windows/" >&2
+        echo "" >&2
+        echo "After installing, run 'mysandbox create $name' again." >&2
+        exit 1
+      fi
       ;;
     s|S)
       echo "skip" > "$sandbox/db_mode"
+      echo "  Skipping persistence." >&2
       ;;
     *)
       echo "file" > "$sandbox/db_mode"
+      echo "  Using file-based store." >&2
       ;;
   esac
 }

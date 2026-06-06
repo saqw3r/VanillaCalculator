@@ -262,6 +262,19 @@ cmd_db_drop() {
   fi
 }
 
+cmd_db_check() {
+  local db_name=$1 pg_user=$2
+  if command -v psql &>/dev/null; then
+    if psql -U "$pg_user" -c "SELECT 1;" 2>/dev/null; then
+      return 0
+    fi
+    if sudo -n -u postgres psql -c "SELECT 1;" 2>/dev/null; then
+      return 0
+    fi
+  fi
+  return 1
+}
+
 # ── Wizard (no args) ──
 
 wizard() {
@@ -325,6 +338,7 @@ usage() {
   echo "  start <port> <db_mode> <sandbox_dir>"
   echo "  compose-start <name> <port> <db_port> <compose_file> <ct>"
   echo "  compose-stop <name> <compose_file> <ct>"
+  echo "  db-check <db_name> <pg_user>"
   echo "  db-create <db_name> <pg_user>"
   echo "  db-drop <db_name> <pg_user>"
   echo ""
@@ -366,6 +380,10 @@ case "${1:-}" in
   compose-stop)
     [ $# -eq 4 ] || { echo "Usage: setup.sh compose-stop <name> <compose_file> <ct>" >&2; exit 1; }
     cmd_compose_stop "$2" "$3" "$4"
+    ;;
+  db-check)
+    [ $# -eq 3 ] || { echo "Usage: setup.sh db-check <db_name> <pg_user>" >&2; exit 1; }
+    cmd_db_check "$2" "$3"
     ;;
   db-create)
     [ $# -eq 3 ] || { echo "Usage: setup.sh db-create <db_name> <pg_user>" >&2; exit 1; }
