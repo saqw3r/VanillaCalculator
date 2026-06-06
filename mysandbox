@@ -500,8 +500,15 @@ cmd_uninstall() {
   local found=false
   for loc in "/usr/local/bin/mysandbox" "$HOME/.local/bin/mysandbox" "$HOME/.local/bin/mysandbox.cmd"; do
     if [ -f "$loc" ] || [ -L "$loc" ]; then
-      rm -f "$loc"
-      echo "Removed $loc"
+      if rm -f "$loc" 2>/dev/null; then
+        echo "Removed $loc"
+      elif sudo -n true 2>/dev/null; then
+        sudo rm -f "$loc"
+        echo "Removed $loc"
+      else
+        echo "Cannot remove $loc (permission denied). Try: sudo rm $loc" >&2
+        continue
+      fi
       found=true
     fi
   done
