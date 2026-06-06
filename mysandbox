@@ -414,6 +414,11 @@ print_info() {
 # ── Install / Uninstall ───────────────────────────────────────────────────────
 
 cmd_install() {
+  # Ensure both scripts are executable (git on Windows often loses +x)
+  for _f in "$SCRIPT_DIR/mysandbox" "$SCRIPT_DIR/setup.sh"; do
+    [ -x "$_f" ] || chmod +x "$_f" 2>/dev/null || true
+  done
+
   local src; src="$(readlink -f "$SCRIPT_DIR/mysandbox" 2>/dev/null || echo "$SCRIPT_DIR/mysandbox")"
   local rc_file=""
   [ -f "$HOME/.bashrc" ] && rc_file="$HOME/.bashrc"
