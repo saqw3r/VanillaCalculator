@@ -233,14 +233,20 @@ cmd_start() {
 
 cmd_compose_start() {
   local name=$1 port=$2 db_port=$3 compose_file=$4 container_tool=$5
-  [ "$container_tool" = "podman" ] && container_tool="podman-compose"
-  API_PORT=$port DB_PORT=$db_port $container_tool compose -p "$name" -f "$compose_file" up -d
+  if [ "$container_tool" = "podman" ]; then
+    API_PORT=$port DB_PORT=$db_port podman-compose -p "$name" -f "$compose_file" up -d
+  else
+    API_PORT=$port DB_PORT=$db_port $container_tool compose -p "$name" -f "$compose_file" up -d
+  fi
 }
 
 cmd_compose_stop() {
   local name=$1 compose_file=$2 container_tool=$3
-  [ "$container_tool" = "podman" ] && container_tool="podman-compose"
-  $container_tool compose -p "$name" -f "$compose_file" down -v 2>/dev/null || true
+  if [ "$container_tool" = "podman" ]; then
+    podman-compose -p "$name" -f "$compose_file" down -v 2>/dev/null || true
+  else
+    $container_tool compose -p "$name" -f "$compose_file" down -v 2>/dev/null || true
+  fi
 }
 
 cmd_db_create() {
