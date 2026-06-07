@@ -234,7 +234,7 @@ cmd_start() {
 cmd_compose_start() {
   local name=$1 port=$2 db_port=$3 compose_file=$4 container_tool=$5
   if [ "$container_tool" = "podman" ]; then
-    API_PORT=$port DB_PORT=$db_port podman-compose -p "$name" -f "$compose_file" up -d
+    API_PORT=$port DB_PORT=$db_port podman-compose -p "$name" -f "$compose_file" up -d 2>/tmp/.podman_err || { cat /tmp/.podman_err >&2; return 1; }
   else
     API_PORT=$port DB_PORT=$db_port $container_tool compose -p "$name" -f "$compose_file" up -d
   fi
