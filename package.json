@@ -10,7 +10,6 @@
     "test:kill": "bats --filter kill tests/mysandbox.bats"
   },
   "dependencies": {
-    "@next/swc-win32-x64-msvc": "^14.2.18",
     "@swc/core": "^1.15.33",
     "next": "15.5.18",
     "pg": "^8.13.0",
