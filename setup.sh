@@ -233,11 +233,13 @@ cmd_start() {
 
 cmd_compose_start() {
   local name=$1 port=$2 db_port=$3 compose_file=$4 container_tool=$5
+  [ "$container_tool" = "podman" ] && container_tool="podman-compose"
   API_PORT=$port DB_PORT=$db_port $container_tool compose -p "$name" -f "$compose_file" up -d
 }
 
 cmd_compose_stop() {
   local name=$1 compose_file=$2 container_tool=$3
+  [ "$container_tool" = "podman" ] && container_tool="podman-compose"
   $container_tool compose -p "$name" -f "$compose_file" down -v 2>/dev/null || true
 }
 
